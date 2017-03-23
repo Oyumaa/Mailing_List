@@ -1,0 +1,152 @@
+
+import pandas as pd
+from sqlalchemy.types import String 
+from sqlalchemy import create_engine
+import sqlalchemy as sa
+import pickle
+import numpy as np 
+
+# read csv files into pandas DataFrame
+df1 = r'C:\MSPA\420_Data Management\SSCC Projects\okg2480item.csv' 
+df2 = r'C:\MSPA\420_Data Management\SSCC Projects\okg2480mail.csv'
+df3 = r'C:\MSPA\420_Data Management\SSCC Projects\okg2480customer.csv' 
+
+# create separate datasets
+
+item_df=pd.read_csv(df1,sep=',') 
+mail_df=pd.read_csv(df2,sep=',') 
+customer_df=pd.read_csv(df3,sep=',') 
+
+# verify duplicated customers records
+
+dup_item=item_df.duplicated() 
+dup_mail=mail_df.duplicated()
+dup_customer=customer_df.duplicated()
+
+# export the duplicated records into csv files
+
+dup_item.to_csv('dup_item.csv')
+dup_mail.to_csv('dup_mail.csv') 
+dup_customer.to_csv('dup_customer.csv') 
+
+# exclude records that don't match customer records from the item and mail datasets
+
+check_mail=mail_df['acctno'].isin(customer_df['acctno']) 
+mail_df['acctno_match']=check_mail
+mail_df_notmatched = (mail_df[mail_df['acctno_match'] == False])
+check_item=item_df['acctno'].isin(customer_df['acctno']) 
+item_df['acctno_match']=check_item
+item_df_notmatched = (item_df[item_df['acctno_match'] == False]) 
+
+# isolate the records that match customers
+check_mail=mail_df['acctno'].isin(customer_df['acctno'])
+mail_df['acctno_match']=check_mail
+mail_df_matched = (mail_df[mail_df['acctno_match'] == True]) 
+check_item=item_df['acctno'].isin(customer_df['acctno'])
+item_df['acctno_match']=check_item
+item_df_matched = (item_df[item_df['acctno_match'] == True]) 
+
+# create sqlite database
+engine = sa.create_engine('sqlite:///xyz.db') 
+
+# store data in the sqlite database updating the existing records in database with the current records
+
+item_df_matched.to_sql('item', engine,if_exists='replace',dtype={'Col_1': String}) 
+mail_df_matched.to_sql('mail', engine, if_exists='replace',dtype={'Col_1': String})
+customer_df.to_sql('customer', engine,if_exists='replace',dtype={'Col_1': String}) 
+
+# view the table from sqlite database
+print(pd.read_sql_query('SELECT name FROM sqlite_master WHERE type = "table"',engine)) 
+
+# create marketing mails for customers who received mails at least five times
+
+count_mail = ('mail_1','mail_2','mail_3','mail_4','mail_5','mail_6',
+'mail_7','mail_8', 'mail_9','mail_10','mail_11','mail_12','mail_13',
+'mail_14','mail_15','mail_16') 
+col_list = list(count_mail) 
+mail_df['total'] = mail_df[col_list].apply(numpy.sum, axis=1) 
+
+custSelect = []
+for i in mail_df['total']:
+  if i >=  5:
+    custSelect.append(True)
+  else:
+  custSelect.append(False)
+  mail_df['custSelect'] = custSelect 
+
+acctNoSelected = (mail_df[mail_df['custSelect']==True]) 
+
+#create lists for all the columns that are going to be in mail_camp 
+ytdsales = [] 
+ytdtrans = []
+zhmt=[]
+zmbv=[]
+acctNo=[] 
+
+# getting customer records for customers who received 5 mails based in account selected
+for i in acctNoSelected['acctno']:
+  custRec = customer_df[(customer_df['acctno']== i)]
+  x = custRec['ytd_sales_2009'].iloc[-1] 
+  y= custRec['ytd_transactions_2009'].iloc[-1]
+  z1=custRec['zhomeent'].iloc[-1]
+  z2 = custRec['zmobav'].iloc[-1]
+  acctNo.append(i) 
+  ytdsales.append(x)
+  ytdtrans.append(y)
+  zhmt.append(z1) 
+  zmbv.append(z2)
+acctNoSelected['acctno'] = acctNo
+acctNoSelected['2009YtdTrans'] = ytdtrans
+acctNoSelected['2009YtdSales'] = ytdtrans 
+acctNoSelected['zhomeent'] = zhmt
+acctNoSelected['zmobav'] = zmbv
+
+# define function to replace categorical value with integers
+def coding(col, codeDict): # col= column with categorical values and codeDict=replacement I need 
+    colCoded=pd.Series(col, copy=True)
+    for key, value in codeDict.items():
+      colCoded.replace(key, value, inplace=True)
+     return colCoded 
+acctNoSelected['zhomeent1'] = coding(acctNoSelected['zhomeent'], {'Y':1,'U':0})
+acctNoSelected['zmobav1'] = coding(acctNoSelected['zmobav'], {'Y':1,'U':0}) 
+
+# concatenate all the data to create mail_camp database
+mail_camp = pd.concat([acctNoSelected['acctno'],
+                      acctNoSelected['total'],
+                      acctNoSelected['2009YtdSales'],
+                      acctNoSelected['2009YtdTrans'],
+                      acctNoSelected['zhomeent'],
+                      acctNoSelected['zmobav'],
+                      acctNoSelected['zhomeent1'],
+                      acctNoSelected['zmobav1']], axis = 1)
+ 
+# saving my data in csv 
+mail_camp.to_csv('mail_camp.csv',sep=',',index=False) 
+ 
+# pickle my mail_camp customer data
+file = open('mail_camp.pck', 'w') 
+pickle.dump(mail_camp,file)
+file.close() 
+ 
+# count number of records using sql syntax
+
+print('Number of records im item:',pd.read_sql_query('SELECT count(*) FROM item',engine)) 
+print('Number of records im mail:',pd.read_sql_query('SELECT count(*) FROM mail',engine)) 
+print('Number of records in customer:',pd.read_sql_query('SELECT count(*) FROM customer',engine))
+
+# cross tabulation of zhomeent and zhomeent1; Sum of U and Y doesn't equal with all because of the missing values 
+pd.crosstab(mail_camp.zhomeent, mail_camp.zhomeent1,margins=True) 
+pd.crosstab(mail_camp.zmobav1, mail_camp.zmobav,rownames=['zmobav1'],colnames=['zmobav'],margins=True)
+
+# counting rows in CSV file 
+count = 0 
+with open('mail_camp.csv', 'rb') as count_file: 
+ csv_reader = csv.reader(count_file) 
+      for row in csv_reader: 
+      count += 1  
+ print count
+ 
+ 
+
+
+
